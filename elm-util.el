@@ -1,6 +1,7 @@
-;;; elm-utils.el --- General utility functions used by Elm mode modules
+;;; elm-utils.el --- General utility functions used by Elm mode modules.
 
 ;; Copyright (C) 2013, 2014  Joseph Collard
+;; Copyright (C) 2015  Bogdan Popa
 
 ;; Author: Joseph Collard
 ;; URL: https://github.com/jcollard/elm-mode
@@ -21,111 +22,84 @@
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-
-;; Provides useful utility functions
-
-;; TODO: should be based on the OS.
-
 ;;; Code:
-(defvar directory-seperator 
-  "/")
 
+(require 'f)
+(require 'json)
+(require 'let-alist)
+(require 's)
 
-(defvar dependencies-file-name
-  "elm-package.json")
+(require 'haskell-decl-scan nil 'noerror)
+(require 'inf-haskell nil 'noerror)
 
-;; If splitting right would not half the width of the current
-;; buffer, splits right. Otherwise, splits below
-(defun intelligent-split-window ()
-  (if (not (fboundp 'window-total-width)) (split-window)
-    (let ((width (window-total-width))
-	  (height (window-total-height)))
-      (if (> (/ width 2) height)
-	  (split-window-right)
-        (split-window-below)))))
+(defconst elm-package-json
+  "elm-package.json"
+  "The name of the package JSON configuration file.")
 
-(defun intercalate (seperator list)
-  (let ((helper (lambda (x y) (concat x (concat seperator y)))))
-    (reduce helper list)))
+(defun elm--get-module-name ()
+  "Return the qualified name of the module in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "module +\\([A-Z][A-Za-z0-9.]*\\)" nil t)
+    (buffer-substring-no-properties (match-beginning 1) (match-end 1))))
 
-(defun merge-path (dir-path-list)
-  (let ((helper (lambda (x y) (concat x (concat y directory-seperator)))))
-    (reduce helper (cons "" dir-path-list))))
+(defun elm--get-decl ()
+  "Return the current declaration.
 
-;; Get the current working directory for the file being worked on
-(defun get-file-directory ()
-  (let* ((file-path (buffer-file-name))
-	 (split-file-path (split-string file-path directory-seperator))
-	 (dir-path-list (butlast split-file-path))
-	 (dir-path (merge-path dir-path-list)))
-    dir-path))
+Relies on `haskell-mode' stuff."
+  (when (not (fboundp #'haskell-ds-backward-decl))
+    (error "This functionality requires haskell-mode"))
 
-(defun get-file-path-directory (file-path)
-  (let* ((split-file-path (split-string file-path directory-seperator))
-	 (dir-path-list (butlast split-file-path))
-	 (dir-path (merge-path dir-path-list)))
-    dir-path))
+  (save-excursion
+    (goto-char (1+ (point)))
+    (let* ((start (or (haskell-ds-backward-decl) (point-min)))
+           (end (or (haskell-ds-forward-decl) (point-max)))
+           (raw-decl (s-trim-right (buffer-substring start end)))
+           (lines (split-string raw-decl "\n"))
+           (first-line (car lines)))
 
+      (inferior-haskell-flash-decl start end)
+      (if (string-match-p "^[a-z].*:" first-line)
+          (cdr lines)
+        lines))))
 
-;; Returns the name of the module in the current buffer based on
-;; its filename and relative location to the nearest `dependencies-file-name`
-(defun get-module-name ()
-  (let* ((m-d-path (find-dependency-file-path))
-	 (d-path (if m-d-path m-d-path (get-file-directory)))
-	 (d-split (split-string d-path directory-seperator))
-	 (f-path (buffer-file-name))
-	 (f-split (split-string f-path directory-seperator))
-	 (mod-split (remove-matching d-split f-split))
-	 (mod (intercalate "." mod-split))
-	 (mod-split2 (butlast (split-string mod "\\.")))
-	 (mod2 (intercalate "." mod-split2)))
-    mod2))
+(defun elm--build-import-statement ()
+  "Generate a statement that will import the current module."
+  (concat "import " (elm--get-module-name) " exposing (..) \n"))
 
-(defun buffer-local-file-name ()
-  (let* ((m-d-path (find-dependency-file-path))
-	 (d-path (if m-d-path m-d-path (get-file-directory)))
-	 (d-split (split-string d-path directory-seperator))
-	 (f-path (buffer-file-name))
-	 (f-split (split-string f-path directory-seperator))
-	 (mod-split (remove-matching d-split f-split))
-	 (mod (intercalate directory-seperator mod-split)))
-    mod))
-  
+(defun elm--get-buffer-dirname ()
+  "Return the absolute dirname of the current buffer."
+  (concat (f-dirname (buffer-file-name)) "/"))
 
-(defun remove-matching (ls0 ls1)
-  (if (null ls0) ls1
-    (let ((h0 (car ls0))
-	  (h1 (car ls1)))
-      (if (equal h0 h1) (remove-matching (cdr ls0) (cdr ls1))
-	ls1))))
+(defun elm--buffer-local-file-name ()
+  "Return the current file name relative to the dependency file."
+  (let ((dirname (buffer-file-name))
+        (deppath (elm--find-dependency-file-path)))
+    (f-relative dirname deppath)))
 
-;; Returns the directory of the current buffer if it contains 
-;; `dependencies-file-name`. Otherwise, it returns the nearest parent 
-;; directory that contains `dependencies-file-name`. If no parent folder
-;; contains `dependencies-file-name` `nil` is returned
-(defun find-dependency-file-path ()
-  (find-dependency-file-path-helper (get-file-directory)))
+(defun elm--find-dependency-file-path ()
+  "Recursively search for a directory containing a package JSON file."
+  (let* ((path (f-traverse-upwards
+                (lambda (path)
+                  (f-exists? (f-expand elm-package-json path)))))
+         (path (if (not path)
+                   (f-dirname (buffer-file-name))
+                 path)))
 
-;; Returns `dir-path` if it contains `dependencies-file-name`.
-;; Otherwise, it checks the parent directory. If the root directory
-;; is reached `nil` is returned
-(defun find-dependency-file-path-helper (dir-path)
-  (if (not dir-path) nil
-    (if (contains-dependency-file dir-path) dir-path
-      (find-dependency-file-path-helper (up-dir dir-path)))))
+    (concat path "/")))
 
-;; Returns the parent directory of `dir-path` or `nil` if there is no parent directory
-(defun up-dir (dir-path)
-  (let* ((dir-path-clean (file-name-as-directory dir-path))
-	 (split-file-path (split-string dir-path-clean directory-seperator))
-	 (up-dir-path-list (butlast split-file-path 2))
-	 (up-dir-path (merge-path up-dir-path-list)))
-    (if (eq up-dir-path "") nil up-dir-path)))
+(defun elm--read-dependency-file ()
+  "Find and read the JSON dependency file into an object."
+  (let ((dep-file (f-join (elm--find-dependency-file-path) elm-package-json)))
+    (json-read-file dep-file)))
 
-;; Returns true if the `dir-path` contains `dependencies-file-name` and `nil` otherwise
-(defun contains-dependency-file (dir-path)
-  (let ((ls (directory-files-and-attributes dir-path nil dependencies-file-name)))
-    (not (null ls))))
+(defun elm--find-main-file ()
+  "Find the Main.elm file."
+  (let-alist (elm--read-dependency-file)
+    (let ((source-dir (aref .source-directories 0)))
+      (if (equal "." source-dir)
+          "Main.elm"
+        (f-join source-dir "Main.elm")))))
 
 (defun elm-get-package-dir (dir-path)
   (concat (file-name-as-directory dir-path) "elm-stuff"))
@@ -133,9 +107,13 @@
 (defun elm-remove-package-dir (dir-path)
   "Remove the elm-stuff directory to force elm-make to resync the packages. This is needed after an elm upgrade"
   (let ((pkg-dir (elm-get-package-dir dir-path)))
-    (delete-directory pkg-dir t nil)))
 
+(defun elm-clean-packages ()
+    "Clean elm packages directory."
+    (interactive)
+    (let ((dir (find-dependency-file-path)))
+    (if dir
+        (elm-remove-package-dir dir))))
 
 (provide 'elm-util)
-
 ;;; elm-util.el ends here
