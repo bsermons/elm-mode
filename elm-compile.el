@@ -45,6 +45,13 @@
   (interactive)
   (elm-compile (buffer-local-file-name) output))
 
+(defun elm-clean-packages ()
+  "Clean elm packages directory."
+  (interactive)
+  (let ((dir (find-dependency-file-path)))
+    (if dir
+        (elm-remove-package-dir dir))))
+
 (provide 'elm-compile)
 
 ;;; elm-compile.el ends here

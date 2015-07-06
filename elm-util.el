@@ -127,6 +127,13 @@
   (let ((ls (directory-files-and-attributes dir-path nil dependencies-file-name)))
     (not (null ls))))
 
+(defun elm-get-package-dir (dir-path)
+  (concat (file-name-as-directory dir-path) "elm-stuff"))
+
+(defun elm-remove-package-dir (dir-path)
+  "Remove the elm-stuff directory to force elm-make to resync the packages. This is needed after an elm upgrade"
+  (let ((pkg-dir (elm-get-package-dir dir-path)))
+    (delete-directory pkg-dir t nil)))
 
 
 (provide 'elm-util)
