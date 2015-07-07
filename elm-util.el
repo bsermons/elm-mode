@@ -101,19 +101,23 @@ Relies on `haskell-mode' stuff."
           "Main.elm"
         (f-join source-dir "Main.elm")))))
 
-(defun elm-get-package-dir (dir-path)
-  (concat (file-name-as-directory dir-path) "elm-stuff"))
+(defun elm-get-package-dir (dir)
+  "Locate the project's elm-stuff given DIR."
+  (concat (file-name-as-directory dir) "elm-stuff"))
 
-(defun elm-remove-package-dir (dir-path)
-  "Remove the elm-stuff directory to force elm-make to resync the packages. This is needed after an elm upgrade"
-  (let ((pkg-dir (elm-get-package-dir dir-path)))
+(defun elm-clean-package-dir (dir)
+  "Remove the packages DIR to force elm-make to resync the packages.
+
+   This is needed after an elm upgrade"
+  (let ((pkg-dir (elm-get-package-dir dir)))
+    (delete-directory pkg-dir t nil)))
 
 (defun elm-clean-packages ()
     "Clean elm packages directory."
     (interactive)
     (let ((dir (find-dependency-file-path)))
     (if dir
-        (elm-remove-package-dir dir))))
+        (elm-clean-package-dir dir))))
 
 (provide 'elm-util)
 ;;; elm-util.el ends here
